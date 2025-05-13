@@ -1,0 +1,290 @@
+from manim import *
+import random
+import math
+import numpy as np  
+
+class SimulationEpidemie(Scene):
+    def construct(self):
+        
+        RAYON = 3
+        NB_POINTS = 20
+        NB_INFECTES_INIT = 3
+        RAYON_INFECTION = 0.5
+        PROBA_INFECTION = 0.5
+        PROBA_DEPLACEMENT = 0.3
+        PROBA_GUERISON = 0.2
+        PROBA_CONFINEMENT = 0.2
+        PAS = 30
+        NB_SIMULATIONS = 100
+
+        historiques_infections = []
+        historiques_sains = []
+
+        for indice_sim in range(NB_SIMULATIONS):
+            points = []
+            etats = []                      
+            positions_originales = []
+            historique_infections = []
+            historique_sains = []
+            confines = [False] * NB_POINTS
+
+            pas_angle = TAU / NB_POINTS
+
+           
+            for i in range(NB_POINTS):
+                angle = i * pas_angle
+                pos = RAYON * np.array([math.cos(angle), math.sin(angle), 0])
+                dot = Dot(point=pos, color=GREEN, radius=0.1)
+                points.append(dot)
+                positions_originales.append(pos)
+                etats.append("S")
+
+            indices_infectes = random.sample(range(NB_POINTS), NB_INFECTES_INIT)
+            for idx in indices_infectes:
+                points[idx].set_color(RED)
+                etats[idx] = "I"
+
+           
+            if indice_sim == 0:
+                compteur = Integer(number=len(indices_infectes), font_size=36).to_corner(UP + RIGHT)
+                etiquette_compteur = Text("Infectes:", font_size=30).next_to(compteur, LEFT)
+                self.add(*points, etiquette_compteur, compteur)
+
+            
+            nb_infectes = sum(1 for s in etats if s == "I")
+            nb_sains = sum(1 for s in etats if s == "S")
+            historique_infections.append(nb_infectes)
+            historique_sains.append(nb_sains)
+            if indice_sim == 0:
+                compteur.set_value(nb_infectes)
+
+          
+            def maj_points():
+                animations = []
+                positions_futures = []
+                nouveaux_etats = etats[:]
+
+                for i, dot in enumerate(points):
+                    pos = dot.get_center()
+
+                    if etats[i] == "I" and not confines[i] and random.random() < PROBA_CONFINEMENT:
+                        confines[i] = True
+
+                    if confines[i]:
+                        cible = positions_originales[i] if not np.allclose(pos, positions_originales[i]) else pos
+                    else:
+                        if np.allclose(pos, positions_originales[i]):
+                            cible = ORIGIN if random.random() < PROBA_DEPLACEMENT else pos
+                        else:
+                            cible = positions_originales[i]
+
+                    positions_futures.append(cible)
+
+                    def get_updater(depart, arrivee):
+                        return lambda mob, alpha: mob.move_to(interpolate(depart, arrivee, alpha))
+
+                    if indice_sim == 0:
+                        animations.append(UpdateFromAlphaFunc(dot, get_updater(pos, cible)))
+
+              
+                for i in range(NB_POINTS):
+                    if etats[i] != "I":
+                        continue
+                    for j in range(NB_POINTS):
+                        if etats[j] == "S":
+                            dist = np.linalg.norm(positions_futures[i] - positions_futures[j])
+                            if dist < RAYON_INFECTION and random.random() < PROBA_INFECTION:
+                                nouveaux_etats[j] = "I"
+
+                
+                for i in range(NB_POINTS):
+                    if etats[i] == "I" and random.random() < PROBA_GUERISON:
+                        nouveaux_etats[i] = "R"
+
+                return animations, nouveaux_etats
+
+           
+            for _ in range(PAS):
+                animations, nouveaux_etats = maj_points()
+                if indice_sim == 0:
+                    self.play(*animations, run_time=0.5)
+
+                for i, nouvel_etat in enumerate(nouveaux_etats):
+                    if nouvel_etat != etats[i]:
+                        etats[i] = nouvel_etat
+                        if nouvel_etat == "I":
+                            points[i].set_color(RED)
+                        elif nouvel_etat == "R":
+                            points[i].set_color(BLUE)
+                        else:
+                            points[i].set_color(GREEN)
+
+                nb_infectes = sum(1 for s in etats if s == "I")
+                nb_sains = sum(1 for s in etats if s == "S")
+                historique_infections.append(nb_infectes)
+                historique_sains.append(nb_sains)
+                if indice_sim == 0:
+                    compteur.set_value(nb_infectes)
+
+           
+            historiques_infections.append(historique_infections)
+            historiques_sains.append(historique_sains)
+
+       
+        moyenne_infections = [sum(hist[i] for hist in historiques_infections) / NB_SIMULATIONS
+                              for i in range(PAS + 1)]
+        moyenne_sains = [sum(hist[i] for hist in historiques_sains) / NB_SIMULATIONS
+                         for i in range(PAS + 1)]
+
+        
+        S, I, R = [NB_POINTS - len(indices_infectes)], [float(len(indices_infectes))], [0.0]
+        n = PROBA_DEPLACEMENT**2 * 19
+        BETA = n * PROBA_INFECTION
+        GAMMA = PROBA_GUERISON
+        TAUX_CONFINEMENT = PROBA_CONFINEMENT
+
+        for _ in range(PAS):
+            s, i, r = S[-1], I[-1], R[-1]
+            infectes_eff = i * (1 - TAUX_CONFINEMENT)
+            nouvelles_infections = BETA * s * infectes_eff / NB_POINTS
+            nouvelles_guerisons = GAMMA * i
+
+            S.append(s - nouvelles_infections)
+            I.append(i + nouvelles_infections - nouvelles_guerisons)
+            R.append(r + nouvelles_guerisons)
+
+        
+        self.clear()
+        axes_I = Axes(
+            x_range=[0, PAS], y_range=[0, NB_POINTS],
+            axis_config={"include_numbers": True}
+        ).scale(0.8).to_edge(DOWN)
+        labels_I = VGroup(Text("Temps"), Text("Infectes")).arrange(DOWN).move_to(axes_I)
+
+        courbe_sim_I = axes_I.plot_line_graph(
+            x_values=list(range(PAS + 1)),
+            y_values=moyenne_infections,
+            line_color=RED, add_vertex_dots=False
+        )
+        courbe_mod_I = axes_I.plot_line_graph(
+            x_values=list(range(len(I))),
+            y_values=I,
+            line_color=BLUE, add_vertex_dots=False
+        )
+        legende_I = VGroup(
+            Dot(color=RED), Text("Moy Sim I", font_size=24),
+            Dot(color=BLUE), Text("Mod I", font_size=24)
+        ).arrange_in_grid(rows=1, cols=4, buff=0.3).next_to(axes_I, DOWN)
+
+        self.play(Create(axes_I), Write(labels_I))
+        self.play(Create(courbe_sim_I), Create(courbe_mod_I), FadeIn(legende_I))
+        self.wait(15)
+
+        
+        self.clear()
+        axes_S = Axes(
+            x_range=[0, PAS], y_range=[0, NB_POINTS],
+            axis_config={"include_numbers": True}
+        ).scale(0.8).to_edge(DOWN)
+        labels_S = VGroup(Text("Temps"), Text("Sains")).arrange(DOWN).move_to(axes_S)
+
+        courbe_sim_S = axes_S.plot_line_graph(
+            x_values=list(range(PAS + 1)),
+            y_values=moyenne_sains,
+            line_color=GREEN, add_vertex_dots=False
+        )
+        courbe_mod_S = axes_S.plot_line_graph(
+            x_values=list(range(len(S))),
+            y_values=S,
+            line_color=YELLOW, add_vertex_dots=False
+        )
+        legende_S = VGroup(
+            Dot(color=GREEN), Text("Moy Sim S", font_size=24),
+            Dot(color=YELLOW), Text("Mod S", font_size=24)
+        ).arrange_in_grid(rows=1, cols=4, buff=0.3).next_to(axes_S, DOWN)
+
+        self.play(Create(axes_S), Write(labels_S))
+        self.play(Create(courbe_sim_S), Create(courbe_mod_S), FadeIn(legende_S))
+        self.wait(15)
+
+
+        avg_infection = [sum(hist[i] for hist in all_infection_histories) / N_SIMULATIONS for i in range(STEPS+1)]
+        avg_healthy = [sum(hist[i] for hist in all_healthy_histories) / N_SIMULATIONS for i in range(STEPS+1)]
+
+        # Modèle SIR théorique
+        S, I, R = [NUM_POINTS - len(infected_indices)], [float(len(infected_indices))], [0.0]
+        n = P_MOVE**2 * 19
+        p = P_INFECT
+        BETA = n*p
+        GAMMA = P_RECOVER
+        CONFINE = 0.2
+
+        for _ in range(30):
+            s = S[-1]
+            i = I[-1]
+            r = R[-1]
+            effective_infected = i * (1 - CONFINE)
+            new_infections = BETA * s * effective_infected / NUM_POINTS
+            new_recoveries = GAMMA * i
+
+            S.append(s - new_infections)
+            I.append(i + new_infections - new_recoveries)
+            R.append(r + new_recoveries)
+
+        # Graphique infectés
+        self.clear()
+
+        axes_I = Axes(x_range=[0, STEPS], y_range=[0, NUM_POINTS], axis_config={"include_numbers": True}).scale(0.8).to_edge(DOWN)
+        labels_I = VGroup(Text("Temps"), Text("Infectés")).arrange(DOWN).move_to(axes_I)
+
+        curve_sim_I = axes_I.plot_line_graph(
+            x_values=list(range(STEPS)),
+            y_values=avg_infection,
+            line_color=RED,
+            add_vertex_dots=False
+        )
+
+        curve_model_I = axes_I.plot_line_graph(
+            x_values=list(range(len(I))),
+            y_values=[x for x in I],
+            line_color=BLUE,
+            add_vertex_dots=False
+        )
+
+        legend_I = VGroup(
+            Dot(color=RED), Text("Moy Sim I", font_size=24),
+            Dot(color=BLUE), Text("Mod I", font_size=24),
+        ).arrange_in_grid(rows=1, cols=4, buff=0.3).next_to(axes_I, DOWN)
+
+        self.play(Create(axes_I), Write(labels_I))
+        self.play(Create(curve_sim_I), Create(curve_model_I), FadeIn(legend_I))
+        self.wait(15)
+
+        self.clear()
+
+        # Graphique sains
+        axes_S = Axes(x_range=[0, STEPS], y_range=[0, NUM_POINTS], axis_config={"include_numbers": True}).scale(0.8).to_edge(DOWN)
+        labels_S = VGroup(Text("Temps"), Text("Sains")).arrange(DOWN).move_to(axes_S)
+
+        curve_sim_S = axes_S.plot_line_graph(
+            x_values=list(range(STEPS)),
+            y_values=avg_healthy,
+            line_color=GREEN,
+            add_vertex_dots=False
+        )
+
+        curve_model_S = axes_S.plot_line_graph(
+            x_values=list(range(len(S))),
+            y_values=[x for x in S],
+            line_color=YELLOW,
+            add_vertex_dots=False
+        )
+
+        legend_S = VGroup(
+            Dot(color=GREEN), Text("Moy Sim S", font_size=24),
+            Dot(color=YELLOW), Text("Mod S", font_size=24),
+        ).arrange_in_grid(rows=1, cols=4, buff=0.3).next_to(axes_S, DOWN)
+
+        self.play(Create(axes_S), Write(labels_S))
+        self.play(Create(curve_sim_S), Create(curve_model_S), FadeIn(legend_S))
+        self.wait(15)
